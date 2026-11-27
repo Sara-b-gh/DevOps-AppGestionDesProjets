@@ -1,0 +1,49 @@
+services:
+  mysql-db:
+    image: mysql:8.0
+    container_name: devops-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: devops_db
+      MYSQL_USER: devops
+      MYSQL_PASSWORD: devops123
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - devops-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pdevops123"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: devops-backend:1.0
+    container_name: devops-backend
+    restart: always
+    ports:
+      - "8083:8080"
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+    networks:
+      - devops-network
+
+  frontend:
+    image: devops-frontend:1.0
+    container_name: devops-frontend
+    restart: always
+    ports:
+      - "8081:80"
+    depends_on:
+      - backend
+    networks:
+      - devops-network
+
+volumes:
+  mysql-data:
+
+networks:
+  devops-network:
+    driver: bridge
