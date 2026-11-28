@@ -1,0 +1,158 @@
+
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE = 'saragherri/backend-app:latest'
+        DOCKER_CREDENTIALS = 'dockerhub-credentials'
+        DOCKER_NETWORK = 'backend-network'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build and Test Maven') {
+            steps {
+                dir('backend/backend') {
+                    sh '''
+                        chmod +x mvnw
+                        ./mvnw clean verify
+                    '''
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                dir('backend/backend') {
+                    sh '''
+                        docker build -t backend-app:latest .
+                        docker tag backend-app:latest $DOCKER_IMAGE
+                    '''
+                }
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKERHUB_USER',
+                        passwordVariable: 'DOCKERHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        echo "$DOCKERHUB_TOKEN" | docker login \
+                            -u "$DOCKERHUB_USER" --password-stdin
+
+                        docker push $DOCKER_IMAGE
+
+                        docker logout
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy MySQL') {
+            steps {
+                sh '''
+                    docker network inspect $DOCKER_NETWORK >/dev/null 2>&1 || \
+                        docker network create $DOCKER_NETWORK
+
+                    if ! docker ps -a --format '{{.Names}}' | grep -qx mysql; then
+                        docker run -d \
+                            --name mysql \
+                            --network $DOCKER_NETWORK \
+                            -e MYSQL_ROOT_PASSWORD=root \
+                            -e MYSQL_DATABASE=devops_db \
+                            -e MYSQL_USER=devops \
+                            -e MYSQL_PASSWORD=devops123 \
+                            --health-cmd="mysqladmin ping -h localhost -pdevops123" \
+                            --health-interval=10s \
+                            --health-timeout=5s \
+                            --health-retries=10 \
+                            mysql:8.0
+                    else
+                        docker start mysql || true
+                        docker network connect $DOCKER_NETWORK mysql 2>/dev/null || true
+                    fi
+
+                    echo "Waiting for MySQL..."
+
+                    for i in $(seq 1 60); do
+                        STATUS=$(docker inspect \
+                            --format='{{.State.Health.Status}}' mysql)
+
+                        if [ "$STATUS" = "healthy" ]; then
+                            echo "MySQL is healthy!"
+                            break
+                        fi
+
+                        if [ "$i" -eq 60 ]; then
+                            echo "MySQL did not become healthy."
+                            docker logs mysql
+                            exit 1
+                        fi
+
+                        sleep 2
+                    done
+                '''
+            }
+        }
+
+        stage('Deploy Backend') {
+            steps {
+                sh '''
+                    docker rm -f backend-app 2>/dev/null || true
+
+                    docker pull $DOCKER_IMAGE
+
+                    docker run -d \
+                        --name backend-app \
+                        --network $DOCKER_NETWORK \
+                        -p 8084:8080 \
+                        -e SPRING_DATASOURCE_URL="jdbc:mysql://mysql:3306/devops_db?createDatabaseIfNotExist=true" \
+                        -e SPRING_DATASOURCE_USERNAME=devops \
+                        -e SPRING_DATASOURCE_PASSWORD=devops123 \
+                        $DOCKER_IMAGE
+                '''
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh '''
+                    echo "Waiting for backend startup..."
+                    sleep 20
+
+                    docker ps -a
+
+                    echo "Backend logs:"
+                    docker logs backend-app
+
+                    if [ "$(docker inspect -f '{{.State.Running}}' backend-app)" != "true" ]; then
+                        echo "Backend container is not running!"
+                        exit 1
+                    fi
+
+                    echo "Backend container is running!"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'CD Pipeline completed successfully!'
+        }
+        failure {
+            echo 'CD Pipeline failed. Check the console output.'
+        }
+    }
+}
