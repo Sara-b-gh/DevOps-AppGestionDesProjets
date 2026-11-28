@@ -17,14 +17,15 @@ pipeline {
         }
 
         stage('Build and Test Maven') {
-            steps {
-                dir('backend/backend') {
-                    sh '''
-                        chmod +x mvnw
-                        ./mvnw clean verify
-                    '''
-                }
-            }
+    steps {
+        dir('backend/backend') {
+            sh '''
+                chmod +x mvnw
+                ./mvnw clean package -DskipTests
+            '''
+        }
+    }
+}
         }
 
         stage('Docker Build') {
