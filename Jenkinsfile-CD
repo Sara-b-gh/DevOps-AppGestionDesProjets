@@ -17,15 +17,14 @@ pipeline {
         }
 
         stage('Build and Test Maven') {
-    steps {
-        dir('backend/backend') {
-            sh '''
-                chmod +x mvnw
-                ./mvnw clean package -DskipTests
-            '''
-        }
-    }
-}
+            steps {
+                dir('backend/backend') {
+                    sh '''
+                        chmod +x mvnw
+                        ./mvnw clean package -DskipTests
+                    '''
+                }
+            }
         }
 
         stage('Docker Build') {
@@ -152,8 +151,10 @@ pipeline {
         success {
             echo 'CD Pipeline completed successfully!'
         }
+
         failure {
             echo 'CD Pipeline failed. Check the console output.'
         }
     }
 }
+
